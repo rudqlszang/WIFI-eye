@@ -91,6 +91,23 @@ class SurveyServer(ThreadingHTTPServer):
         # 파이썬이 병목이 되어서, 재는 게 와이파이가 아니라 CPU 가 된다.
         self.blob = os.urandom(cfg.speed_chunk_bytes)
 
+    def handle_error(self, request, client_address) -> None:
+        """끊긴 연결로는 트레이스백을 안 찍는다.
+
+        **속도 측정은 매번 클라이언트가 먼저 끊는 것으로 끝난다.** 그게
+        설계다 — 정해진 시간만큼 받고 손을 뗀다. 그런데 socketserver 의
+        기본 동작은 그 끊김을 처리되지 않은 예외로 보고 화면에 20줄짜리
+        트레이스백을 찍는다.
+
+        지점 하나 잴 때마다 그게 한 번씩 쌓이면, 정작 봐야 할 '접속 —' 과
+        '저장됨 —' 이 트레이스백 사이에 파묻힌다. 폰이 안 붙을 때 그 두 줄이
+        유일한 단서라서, 묻히면 진단할 방법이 없어진다.
+        """
+        exc = sys.exc_info()[1]
+        if isinstance(exc, (ConnectionResetError, ConnectionAbortedError, BrokenPipeError)):
+            return
+        super().handle_error(request, client_address)
+
 
 class SurveyHandler(BaseHTTPRequestHandler):
     # keep-alive 를 쓰려면 1.1 이어야 한다. 지연 측정에서 이게 핵심이다 —
