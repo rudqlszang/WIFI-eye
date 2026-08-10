@@ -1,0 +1,754 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#f9f9f7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0d0d0d" media="(prefers-color-scheme: dark)">
+<title>와이파이 서베이</title>
+<style>
+/* ---------------------------------------------------------------------------
+   색은 전부 여기서만 정한다. 히트맵은 **sequential** 인코딩이다 — 재는 것이
+   크기(얼마나 빠른가) 하나라서, 단일 색상의 밝기 단계가 맞다.
+
+   무지개(hue 를 값에 매핑)를 안 쓴 이유: 색상환에는 순서가 없다. 초록이
+   노랑보다 큰지 작은지는 배워야 아는 것이고, 그 사이 어디가 경계인지는
+   아무도 못 읽는다. 밝기는 배울 필요가 없다.
+
+   빨강↔초록도 안 쓴다. 남성 20명 중 1명이 그 축을 못 읽는다.
+--------------------------------------------------------------------------- */
+:root {
+  color-scheme: light;
+  --page:        #f9f9f7;
+  --surface:     #fcfcfb;
+  --ink:         #0b0b0b;
+  --ink-2:       #52514e;
+  --ink-muted:   #898781;
+  --grid:        #e1e0d9;
+  --axis:        #c3c2b7;
+  --border:      rgba(11,11,11,0.10);
+  --accent:      #2a78d6;
+  --good:        #0ca30c;
+  --warning:     #fab219;
+  --critical:    #d03b3b;
+  --pressed:     rgba(11,11,11,0.06);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --page:      #0d0d0d;
+    --surface:   #1a1a19;
+    --ink:       #ffffff;
+    --ink-2:     #c3c2b7;
+    --ink-muted: #898781;
+    --grid:      #2c2c2a;
+    --axis:      #383835;
+    --border:    rgba(255,255,255,0.10);
+    --accent:    #3987e5;
+    --pressed:   rgba(255,255,255,0.08);
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0d0d0d; --surface: #1a1a19; --ink: #ffffff; --ink-2: #c3c2b7;
+  --ink-muted: #898781; --grid: #2c2c2a; --axis: #383835;
+  --border: rgba(255,255,255,0.10); --accent: #3987e5;
+  --pressed: rgba(255,255,255,0.08);
+}
+
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { height: 100%; margin: 0; }
+body {
+  display: flex; flex-direction: column;
+  height: 100dvh;
+  background: var(--page); color: var(--ink);
+  font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+  overscroll-behavior: none;
+  touch-action: manipulation;
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+header {
+  display: flex; align-items: baseline; gap: 10px;
+  padding: 10px 14px 8px; border-bottom: 1px solid var(--border);
+}
+header .title { font-weight: 650; font-size: 15px; }
+header .status { font-size: 12.5px; color: var(--ink-2); margin-left: auto; text-align: right; }
+
+/* --- 레이어 탭 --- */
+.layers { display: flex; gap: 6px; padding: 8px 14px; }
+.layers button {
+  flex: 1; padding: 8px 4px; font: inherit; font-size: 13px;
+  background: var(--surface); color: var(--ink-2);
+  border: 1px solid var(--border); border-radius: 9px;
+}
+.layers button[aria-selected="true"] {
+  background: var(--accent); color: #fff; border-color: transparent; font-weight: 600;
+}
+.layers button[hidden] { display: none; }
+
+/* --- 헤드라인 숫자 ---
+   "어디가 제일 잘 잡히나"가 질문이므로, 답을 지도에서 찾게 하지 않고
+   먼저 글자로 말한다. 지도는 그 답이 어디인지와 주변이 어떤지를 보여준다. */
+.best {
+  padding: 2px 14px 8px; min-height: 44px;
+  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+}
+.best .num { font-size: 27px; font-weight: 680; letter-spacing: -0.02em; line-height: 1.1; }
+.best .unit { font-size: 14px; color: var(--ink-2); }
+.best .where { font-size: 13px; color: var(--ink-2); }
+.best .worst { font-size: 12.5px; color: var(--ink-muted); margin-left: auto; }
+.best .empty { font-size: 13.5px; color: var(--ink-muted); }
+
+/* --- 지도 --- */
+.stage { flex: 1; position: relative; margin: 0 10px; min-height: 0; }
+canvas {
+  display: block; width: 100%; height: 100%;
+  background: var(--surface);
+  border: 1px solid var(--border); border-radius: 12px;
+  touch-action: none;
+}
+.hint {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%);
+  color: var(--ink-muted); font-size: 13.5px; text-align: center;
+  pointer-events: none; width: 80%;
+}
+
+/* --- 범례 --- */
+.legend { padding: 10px 14px 4px; }
+.legend .bar {
+  height: 9px; border-radius: 4px; border: 1px solid var(--border);
+}
+.legend .ends {
+  display: flex; justify-content: space-between; margin-top: 4px;
+  font-size: 11.5px; color: var(--ink-muted);
+  font-variant-numeric: tabular-nums;
+}
+.legend[hidden] { display: none; }
+
+/* --- 도구 --- */
+.tools { display: flex; gap: 6px; padding: 8px 14px 12px; }
+.tools button {
+  flex: 1; padding: 11px 2px; font: inherit; font-size: 12.5px;
+  background: var(--surface); color: var(--ink);
+  border: 1px solid var(--border); border-radius: 10px;
+}
+.tools button:active { background: var(--pressed); }
+.tools button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.tools button:disabled { color: var(--ink-muted); }
+
+/* --- 표 (색 말고 다른 경로로도 값을 읽을 수 있어야 한다) --- */
+.sheet {
+  position: fixed; inset: 0; background: var(--page); z-index: 10;
+  display: flex; flex-direction: column; padding: 14px;
+  padding-bottom: calc(14px + env(safe-area-inset-bottom));
+}
+.sheet[hidden] { display: none; }
+.sheet h2 { font-size: 16px; margin: 0 0 10px; }
+.sheet .scroll { flex: 1; overflow: auto; -webkit-overflow-scrolling: touch; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th, td { padding: 7px 8px; text-align: right; border-bottom: 1px solid var(--grid); }
+th:first-child, td:first-child { text-align: left; }
+th { color: var(--ink-muted); font-weight: 500; font-size: 11.5px; }
+td { font-variant-numeric: tabular-nums; }
+tr.best-row td { font-weight: 650; }
+.sheet .close {
+  margin-top: 12px; padding: 12px; font: inherit; font-size: 14px;
+  background: var(--surface); color: var(--ink);
+  border: 1px solid var(--border); border-radius: 10px;
+}
+.note { font-size: 12px; color: var(--ink-muted); margin: 10px 0 0; }
+.dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; vertical-align: -1px; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="title">와이파이 서베이</div>
+  <div class="status" id="status">준비 중…</div>
+</header>
+
+<nav class="layers" id="layers">
+  <button id="tab-speed" aria-selected="true">속도</button>
+  <button id="tab-rtt" aria-selected="false">지연</button>
+  <button id="tab-rssi" aria-selected="false" hidden>신호</button>
+</nav>
+
+<div class="best" id="best"></div>
+
+<main class="stage">
+  <canvas id="map"></canvas>
+  <div class="hint" id="hint">지도를 탭하면 그 자리를 잽니다.<br>먼저 <b>평면도</b>로 집 사진을 올리거나 <b>그리기</b>로 방 윤곽을 그리세요.</div>
+</main>
+
+<div class="legend" id="legend" hidden>
+  <div class="bar" id="legend-bar"></div>
+  <div class="ends"><span id="legend-lo"></span><span id="legend-hi"></span></div>
+</div>
+
+<footer class="tools">
+  <button id="btn-plan">평면도</button>
+  <button id="btn-draw" aria-pressed="false">그리기</button>
+  <button id="btn-undo">되돌리기</button>
+  <button id="btn-table">표</button>
+</footer>
+
+<div class="sheet" id="sheet" hidden>
+  <h2>측정값</h2>
+  <div class="scroll"><table id="table"></table></div>
+  <p class="note" id="table-note"></p>
+  <button class="close" id="btn-close">닫기</button>
+</div>
+
+<input type="file" id="plan-file" accept="image/*" hidden>
+
+<script>
+"use strict";
+
+/* ===========================================================================
+   sequential 램프. 밝음 = 약함, 어두움 = 강함.
+
+   다크 모드에서는 뒤집는다. 규칙은 "값이 0 에 가까운 쪽이 배경으로 물러난다"
+   이지 "밝은 쪽이 약하다"가 아니다. 어두운 배경에서 어두운 색을 '강함'에 주면
+   제일 좋은 자리가 배경에 묻혀서, 정확히 찾으러 온 것이 안 보이게 된다.
+=========================================================================== */
+const RAMP = ["#cde2fb","#b7d3f6","#9ec5f4","#86b6ef","#6da7ec","#5598e7","#3987e5",
+              "#2a78d6","#256abf","#1c5cab","#184f95","#104281","#0d366b"]
+             .map(h => [parseInt(h.slice(1,3),16), parseInt(h.slice(3,5),16), parseInt(h.slice(5,7),16)]);
+
+/* scale 은 값을 '색으로 쓸 축'으로 옮긴다. 클수록 좋게, 그리고 **로그로**.
+
+   속도를 그대로 색에 매핑하면 낮은 쪽이 전부 뭉개진다. 집 안의 속도 분포는
+   공유기 옆이 90, 끝방이 7 하는 식으로 심하게 치우쳐 있어서, 선형으로 펴면
+   7 과 31 이 거의 같은 색이 된다. 4배 차이인데.
+
+   그런데 그 구간이 하필 제일 중요하다. 90 과 85 의 차이는 아무 의미가 없고
+   (둘 다 잘 된다), 7 과 31 의 차이가 영상이 끊기냐 아니냐를 가른다. 색을
+   쓸 데가 있다면 여기다.
+
+   dBm 은 이미 로그 단위라 그대로 둔다. 한 번 더 씌우면 두 번 씌우는 것이다. */
+const LAYERS = {
+  speed: { label: "속도", unit: "Mbps", higherIsBetter: true,
+           scale: v => Math.log10(Math.max(v, 0.1)),
+           fmt: v => v >= 100 ? v.toFixed(0) : v.toFixed(1) },
+  rtt:   { label: "지연", unit: "ms", higherIsBetter: false,
+           scale: v => -Math.log10(Math.max(v, 0.1)),
+           fmt: v => v < 10 ? v.toFixed(1) : v.toFixed(0) },
+  rssi:  { label: "신호", unit: "dBm", higherIsBetter: true,
+           scale: v => v,
+           fmt: v => v.toFixed(0) },
+};
+
+const S = {
+  cfg: null,
+  points: [],
+  plan: { image: null, strokes: [] },
+  layer: "speed",
+  drawMode: false,
+  busy: false,
+  rssiOk: false,
+  planImg: null,
+};
+
+const $ = id => document.getElementById(id);
+const cv = $("map"), ctx = cv.getContext("2d");
+const heat = document.createElement("canvas"), hctx = heat.getContext("2d", { willReadFrequently: true });
+let W = 0, H = 0;
+
+const isDark = () =>
+  document.documentElement.dataset.theme === "dark" ||
+  (document.documentElement.dataset.theme !== "light" &&
+   matchMedia("(prefers-color-scheme: dark)").matches);
+
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+
+/* 램프의 옅은 끝을 잘라 쓴다.
+
+   램프 맨 끝(#cde2fb)은 밝은 배경 대비가 1.29:1 이다. sequential 인코딩에서
+   "값이 0 에 가까우면 배경으로 물러난다"는 원래 의도된 성질인데, 이 지도에는
+   물러나면 안 되는 이유가 있다 — **안 잰 곳을 아예 안 칠하기 때문이다.**
+
+   그러면 화면에 흰 영역이 두 종류가 된다.
+
+       안 재 봤다        (칠하지 않음)
+       재 봤는데 약하다  (제일 옅은 색)
+
+   둘이 똑같이 생기면 "여기는 안 터진다"와 "여기는 모른다"가 구분이 안 되는데,
+   서베이의 결론이 정확히 그 구분이다. 그래서 가장 약한 자리도 배경 대비 2:1
+   은 넘는 단계에서 시작하게 잘랐다 (밝은 배경 #86b6ef 2.06:1 / 어두운 배경
+   #184f95 2.15:1). 밝기 단조성과 단일 색상은 그대로 유지된다. */
+const RAMP_FLOOR_LIGHT = 3 / 12;
+const RAMP_FLOOR_DARK = 2 / 12;
+
+function ramp(t) {
+  t = Math.max(0, Math.min(1, t));
+  const dark = isDark();
+  const r = dark ? RAMP.slice().reverse() : RAMP;
+  const floor = dark ? RAMP_FLOOR_DARK : RAMP_FLOOR_LIGHT;
+  const x = (floor + t * (1 - floor)) * (r.length - 1);
+  const i = Math.min(Math.floor(x), r.length - 2), f = x - i;
+  const a = r[i], b = r[i + 1];
+  return [a[0]+(b[0]-a[0])*f, a[1]+(b[1]-a[1])*f, a[2]+(b[2]-a[2])*f];
+}
+const rgb = c => `rgb(${c[0]|0},${c[1]|0},${c[2]|0})`;
+
+/* --- 값 접근 ------------------------------------------------------------ */
+const val = p => { const v = p[S.layer]; return (typeof v === "number" && isFinite(v)) ? v : null; };
+// 색은 항상 "좋을수록 진하게"로 통일한다. 지연은 작을수록 좋으므로 scale 이
+// 부호를 뒤집는다. 레이어를 바꿀 때마다 색의 의미가 뒤집히면 지도를 매번
+// 다시 읽어야 한다.
+const good = p => LAYERS[S.layer].scale(val(p));
+const measured = () => S.points.filter(p => val(p) !== null);
+
+function setStatus(t) { $("status").textContent = t; }
+
+/* ===========================================================================
+   측정
+=========================================================================== */
+async function measureRtt() {
+  const { ping_count, ping_warmup } = S.cfg;
+  const t = [];
+  for (let i = 0; i < ping_count; i++) {
+    const t0 = performance.now();
+    const res = await fetch(`/api/ping?s=${i}.${Date.now()}`, { cache: "no-store" });
+    await res.arrayBuffer();            // 본문까지 다 받아야 왕복이 끝난 것이다
+    const dt = performance.now() - t0;
+    if (i >= ping_warmup) t.push(dt);   // 앞의 몇 번은 TCP 연결 비용이 섞여 있다
+  }
+  if (!t.length) throw new Error("핑 표본이 없습니다");
+  t.sort((a, b) => a - b);
+  return t[Math.floor(t.length / 2)];   // 중앙값 — 튀는 한 방을 통째로 버린다
+}
+
+async function measureSpeed() {
+  const win = S.cfg.speed_window_s * 1000, ramp0 = S.cfg.speed_rampup_s * 1000;
+  const ctrl = new AbortController();
+  const guard = setTimeout(() => ctrl.abort(), win + ramp0 + 8000);
+  let bytes = 0, atRamp = 0, tRamp = null, tEnd = null;
+  const t0 = performance.now();
+  try {
+    const res = await fetch(`/api/blob?s=${Date.now()}`, { cache: "no-store", signal: ctrl.signal });
+    if (!res.body) throw new Error("이 브라우저는 스트리밍을 지원하지 않습니다");
+    const reader = res.body.getReader();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytes += value.length;
+      const now = performance.now();
+      // 슬로우 스타트 구간을 지나야 링크 속도를 재는 것이 된다
+      if (tRamp === null && now - t0 >= ramp0) { tRamp = now; atRamp = bytes; }
+      if (tRamp !== null && now - tRamp >= win) { tEnd = now; break; }
+    }
+    reader.cancel().catch(() => {});
+    ctrl.abort();
+  } catch (e) {
+    if (e.name !== "AbortError") throw e;
+  } finally {
+    clearTimeout(guard);
+  }
+  // 램프업 구간조차 못 채웠으면 링크가 아주 느린 것이다. 그 자리를 '측정
+  // 실패'로 비워 두면 지도에 구멍이 생기는데, 사실 그게 제일 중요한 정보다.
+  if (tRamp === null || tEnd === null) {
+    const el = (performance.now() - t0) / 1000;
+    return el > 0 ? (bytes * 8) / (el * 1e6) : 0;
+  }
+  return ((bytes - atRamp) * 8) / (((tEnd - tRamp) / 1000) * 1e6);
+}
+
+async function readRssi() {
+  try {
+    const r = await fetch("/api/rssi", { cache: "no-store" }).then(r => r.json());
+    return r.available ? r : null;
+  } catch { return null; }
+}
+
+async function measureAt(p) {
+  if (S.busy) return;
+  S.busy = true;
+  p.state = "measuring";
+  try {
+    if (S.rssiOk) {
+      setStatus("신호 읽는 중…"); draw();
+      const r = await readRssi();
+      if (r) { p.rssi = r.rssi; p.link = r.link_mbps; p.ssid = r.ssid; }
+    }
+    setStatus("지연 재는 중…"); draw();
+    p.rtt = await measureRtt();
+    setStatus("속도 재는 중…"); draw();
+    p.speed = await measureSpeed();
+    p.t = Date.now();
+    p.state = "done";
+    setStatus(`${LAYERS.speed.fmt(p.speed)} Mbps · ${LAYERS.rtt.fmt(p.rtt)} ms`);
+    save();
+  } catch (e) {
+    p.state = "failed";
+    setStatus("측정 실패 — " + e.message);
+  } finally {
+    S.busy = false;
+    render();
+  }
+}
+
+/* ===========================================================================
+   그리기
+=========================================================================== */
+function fit() {
+  const r = cv.parentElement.getBoundingClientRect();
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  W = Math.max(1, r.width); H = Math.max(1, r.height);
+  cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  draw();
+}
+
+function draw() {
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = css("--surface"); ctx.fillRect(0, 0, W, H);
+  drawGrid();
+  drawPlan();
+  drawHeat();
+  drawPoints();
+  $("hint").style.display = (S.points.length || S.plan.image || S.plan.strokes.length) ? "none" : "";
+}
+
+function drawGrid() {
+  ctx.strokeStyle = css("--grid"); ctx.lineWidth = 1;
+  const step = 40;
+  ctx.beginPath();
+  for (let x = step; x < W; x += step) { ctx.moveTo(x + .5, 0); ctx.lineTo(x + .5, H); }
+  for (let y = step; y < H; y += step) { ctx.moveTo(0, y + .5); ctx.lineTo(W, y + .5); }
+  ctx.stroke();
+}
+
+function drawPlan() {
+  if (S.planImg) {
+    // contain 맞춤. 잘라내면 사용자가 찍은 자리와 평면도가 어긋난다.
+    const s = Math.min(W / S.planImg.width, H / S.planImg.height);
+    const w = S.planImg.width * s, h = S.planImg.height * s;
+    ctx.globalAlpha = 0.55;
+    ctx.drawImage(S.planImg, (W - w) / 2, (H - h) / 2, w, h);
+    ctx.globalAlpha = 1;
+  }
+  ctx.strokeStyle = css("--axis");
+  ctx.lineWidth = 2; ctx.lineJoin = "round"; ctx.lineCap = "round";
+  for (const st of S.plan.strokes) {
+    if (st.length < 2) continue;
+    ctx.beginPath();
+    ctx.moveTo(st[0].x * W, st[0].y * H);
+    for (let i = 1; i < st.length; i++) ctx.lineTo(st[i].x * W, st[i].y * H);
+    ctx.stroke();
+  }
+}
+
+function drawHeat() {
+  const pts = measured();
+  if (!pts.length) return;
+  const gs = pts.map(good);
+  const lo = Math.min(...gs), hi = Math.max(...gs);
+  const cell = S.cfg.heatmap_cell_px, pow = S.cfg.idw_power;
+  const R = S.cfg.idw_radius_frac * Math.min(W, H);
+  const gw = Math.max(1, Math.ceil(W / cell)), gh = Math.max(1, Math.ceil(H / cell));
+  heat.width = gw; heat.height = gh;
+  const img = hctx.createImageData(gw, gh), d = img.data;
+  const px = pts.map(p => p.x * W), py = pts.map(p => p.y * H);
+
+  for (let gy = 0; gy < gh; gy++) {
+    const cy = gy * cell + cell / 2;
+    for (let gx = 0; gx < gw; gx++) {
+      const cx = gx * cell + cell / 2;
+      let num = 0, den = 0, near = Infinity;
+      for (let i = 0; i < pts.length; i++) {
+        const dx = px[i] - cx, dy = py[i] - cy;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist < near) near = dist;
+        const w = 1 / Math.pow(Math.max(dist, 0.7), pow);
+        num += gs[i] * w; den += w;
+      }
+      // **재 본 적 없는 곳은 안 칠한다.** 이게 없으면 IDW 가 바깥을 전체
+      // 평균으로 메우는데, 그 색이 측정값과 똑같이 생겨서 구분이 안 된다.
+      if (near > R) continue;
+      const t = hi > lo ? (num / den - lo) / (hi - lo) : 0.5;
+      const c = ramp(t);
+      // 바깥 35% 는 서서히 흐려진다 — 멀수록 근거가 약하다는 게 사실이다
+      const fade = near > R * 0.65 ? 1 - (near - R * 0.65) / (R * 0.35) : 1;
+      const o = (gy * gw + gx) * 4;
+      d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2];
+      d[o + 3] = Math.round(210 * Math.max(0, fade));
+    }
+  }
+  hctx.putImageData(img, 0, 0);
+  ctx.imageSmoothingEnabled = true;
+  ctx.drawImage(heat, 0, 0, W, H);
+}
+
+function drawPoints() {
+  const pts = measured();
+  const gs = pts.map(good);
+  const lo = Math.min(...gs), hi = Math.max(...gs);
+  const surface = css("--surface"), ink = css("--ink"), muted = css("--ink-muted");
+  const placed = [];
+
+  // 값이 좋은 점부터 이름표 자리를 잡는다. 점이 몰리면 전부는 못 쓰는데,
+  // 그때 지워질 것은 덜 중요한 쪽이어야 한다.
+  const order = S.points.slice().sort((a, b) => (val(b) ?? -Infinity) - (val(a) ?? -Infinity));
+
+  for (const p of order) {
+    const x = p.x * W, y = p.y * H;
+    const v = val(p);
+    let fill;
+    if (p.state === "measuring") fill = css("--warning");
+    else if (p.state === "failed") fill = css("--critical");
+    else if (v === null) fill = muted;
+    else fill = rgb(ramp(hi > lo ? (good(p) - lo) / (hi - lo) : 0.5));
+
+    ctx.beginPath(); ctx.arc(x, y, 9, 0, Math.PI * 2);
+    ctx.fillStyle = fill; ctx.fill();
+    // 점끼리 겹쳐도 몇 개인지 보이게 하는 2px 배경색 링
+    ctx.lineWidth = 2; ctx.strokeStyle = surface; ctx.stroke();
+
+    if (p.state === "measuring") {
+      ctx.beginPath(); ctx.arc(x, y, 15, 0, Math.PI * 2);
+      ctx.lineWidth = 2; ctx.strokeStyle = css("--warning"); ctx.stroke();
+      continue;
+    }
+    if (v === null) continue;
+
+    // 이름표. 숫자는 잉크 색으로 쓴다 — 값을 색으로도 쓰고 글자색으로도
+    // 쓰면 배경 위에서 읽히지 않는 조합이 반드시 나온다.
+    const text = LAYERS[S.layer].fmt(v);
+    ctx.font = "600 12px system-ui, -apple-system, 'Segoe UI', sans-serif";
+    const tw = ctx.measureText(text).width;
+    const bw = tw + 10, bh = 17;
+    const bx = Math.max(2, Math.min(W - bw - 2, x - bw / 2));
+    const by = y + 12;
+    if (by + bh > H) continue;
+    const box = { x: bx, y: by, w: bw, h: bh };
+    if (placed.some(q => !(box.x + box.w < q.x || q.x + q.w < box.x ||
+                           box.y + box.h < q.y || q.y + q.h < box.y))) continue;
+    placed.push(box);
+
+    ctx.fillStyle = surface;
+    ctx.beginPath(); ctx.roundRect(bx, by, bw, bh, 4); ctx.fill();
+    ctx.strokeStyle = css("--border"); ctx.lineWidth = 1; ctx.stroke();
+    ctx.fillStyle = ink; ctx.textBaseline = "middle"; ctx.textAlign = "center";
+    ctx.fillText(text, bx + bw / 2, by + bh / 2 + 0.5);
+  }
+}
+
+/* ===========================================================================
+   화면 갱신 — 지도 + 헤드라인 + 범례 + 표
+=========================================================================== */
+function render() {
+  draw(); renderBest(); renderLegend(); renderTable();
+}
+
+function renderBest() {
+  const el = $("best"), pts = measured(), L = LAYERS[S.layer];
+  if (!pts.length) {
+    const n = S.points.length;
+    el.innerHTML = `<span class="empty">${n ? "측정 중…" : "아직 잰 자리가 없습니다."}</span>`;
+    return;
+  }
+  const best = pts.reduce((a, b) => good(b) > good(a) ? b : a);
+  const worst = pts.reduce((a, b) => good(b) < good(a) ? b : a);
+  const bi = S.points.indexOf(best) + 1, wi = S.points.indexOf(worst) + 1;
+  el.innerHTML =
+    `<span class="num">${L.fmt(val(best))}</span><span class="unit">${L.unit}</span>` +
+    `<span class="where">가장 좋은 자리 · ${bi}번</span>` +
+    (pts.length > 1
+      ? `<span class="worst">가장 나쁜 자리 ${wi}번 · ${L.fmt(val(worst))} ${L.unit}</span>`
+      : "");
+}
+
+function renderLegend() {
+  const pts = measured(), lg = $("legend"), L = LAYERS[S.layer];
+  if (pts.length < 2) { lg.hidden = true; return; }
+  lg.hidden = false;
+  const stops = [];
+  for (let i = 0; i <= 10; i++) stops.push(rgb(ramp(i / 10)));
+  $("legend-bar").style.background = `linear-gradient(90deg, ${stops.join(",")})`;
+  const vs = pts.map(val);
+  const worstV = L.higherIsBetter ? Math.min(...vs) : Math.max(...vs);
+  const bestV  = L.higherIsBetter ? Math.max(...vs) : Math.min(...vs);
+  $("legend-lo").textContent = `나쁨 ${L.fmt(worstV)} ${L.unit}`;
+  $("legend-hi").textContent = `${L.fmt(bestV)} ${L.unit} 좋음`;
+}
+
+function renderTable() {
+  const t = $("table");
+  if (!S.points.length) { t.innerHTML = ""; $("table-note").textContent = "아직 잰 자리가 없습니다."; return; }
+  const pts = measured();
+  const best = pts.length ? pts.reduce((a, b) => good(b) > good(a) ? b : a) : null;
+  const head = `<tr><th>지점</th><th>속도 Mbps</th><th>지연 ms</th>${S.rssiOk ? "<th>신호 dBm</th>" : ""}</tr>`;
+  const rows = S.points.map((p, i) => {
+    const c = val(p) !== null ? rgb(ramp(0.75)) : css("--ink-muted");
+    const cell = (v, f) => (typeof v === "number" && isFinite(v)) ? f(v) : "—";
+    return `<tr class="${p === best ? "best-row" : ""}">` +
+      `<td><span class="dot" style="background:${p === best ? c : "transparent"};border:1px solid var(--border)"></span>${i + 1}번${p === best ? " (최고)" : ""}</td>` +
+      `<td>${cell(p.speed, LAYERS.speed.fmt)}</td>` +
+      `<td>${cell(p.rtt, LAYERS.rtt.fmt)}</td>` +
+      (S.rssiOk ? `<td>${cell(p.rssi, LAYERS.rssi.fmt)}</td>` : "") + `</tr>`;
+  }).join("");
+  t.innerHTML = head + rows;
+  $("table-note").textContent = S.rssiOk
+    ? "속도가 느린데 신호는 좋다면 전파가 아니라 채널이 막힌 것입니다 — 공유기 채널을 바꿔 보세요."
+    : "신호 세기(dBm)는 브라우저가 읽을 수 없습니다. adb 를 연결하면 열이 하나 늘어납니다 (README 참고).";
+}
+
+/* ===========================================================================
+   입력
+=========================================================================== */
+function pos(e) {
+  const r = cv.getBoundingClientRect();
+  return { x: (e.clientX - r.left) / r.width, y: (e.clientY - r.top) / r.height };
+}
+
+let drag = null;
+cv.addEventListener("pointerdown", e => {
+  cv.setPointerCapture(e.pointerId);
+  const p = pos(e);
+  if (S.drawMode) { S.plan.strokes.push([p]); drag = { draw: true }; }
+  else drag = { ...p, moved: false };
+});
+cv.addEventListener("pointermove", e => {
+  if (!drag) return;
+  const p = pos(e);
+  if (drag.draw) { S.plan.strokes[S.plan.strokes.length - 1].push(p); draw(); }
+  else if (Math.hypot((p.x - drag.x) * W, (p.y - drag.y) * H) > 12) drag.moved = true;
+});
+cv.addEventListener("pointerup", e => {
+  const d = drag; drag = null;
+  if (!d) return;
+  if (d.draw) { save(); draw(); return; }
+  if (d.moved) return;
+  if (S.busy) { setStatus("먼저 측정이 끝나야 합니다"); return; }
+  const p = pos(e);
+  // 이미 있는 점 근처를 누르면 새로 만들지 않고 그 자리를 다시 잰다.
+  const hit = S.points.find(q => Math.hypot((q.x - p.x) * W, (q.y - p.y) * H) < 22);
+  if (hit) { measureAt(hit); return; }
+  const np = { x: p.x, y: p.y, state: "new" };
+  S.points.push(np);
+  render();
+  measureAt(np);
+});
+cv.addEventListener("pointercancel", () => { drag = null; });
+
+for (const k of ["speed", "rtt", "rssi"]) {
+  $("tab-" + k).addEventListener("click", () => {
+    S.layer = k;
+    for (const j of ["speed", "rtt", "rssi"])
+      $("tab-" + j).setAttribute("aria-selected", String(j === k));
+    render();
+  });
+}
+
+$("btn-draw").addEventListener("click", () => {
+  S.drawMode = !S.drawMode;
+  $("btn-draw").setAttribute("aria-pressed", String(S.drawMode));
+  setStatus(S.drawMode ? "손가락으로 벽을 그리세요" : "지도를 탭하면 잽니다");
+});
+
+$("btn-plan").addEventListener("click", () => $("plan-file").click());
+$("plan-file").addEventListener("change", e => {
+  const f = e.target.files && e.target.files[0];
+  if (!f) return;
+  const fr = new FileReader();
+  fr.onload = () => {
+    const im = new Image();
+    im.onload = () => {
+      // 폰 카메라 사진은 그대로 두면 12MP 다. localStorage 에도 안 들어가고
+      // 매 프레임 확대해서 그리느라 스크롤이 걸린다.
+      const max = 1400, s = Math.min(1, max / Math.max(im.width, im.height));
+      const c = document.createElement("canvas");
+      c.width = Math.round(im.width * s); c.height = Math.round(im.height * s);
+      c.getContext("2d").drawImage(im, 0, 0, c.width, c.height);
+      S.plan.image = c.toDataURL("image/jpeg", 0.8);
+      loadPlanImage();
+      save();
+    };
+    im.src = fr.result;
+  };
+  fr.readAsDataURL(f);
+  e.target.value = "";
+});
+
+$("btn-undo").addEventListener("click", () => {
+  if (S.busy) return;
+  // 그리기 중이면 선을, 아니면 측정점을 되돌린다. 모드에 있는 것을 지운다.
+  if (S.drawMode && S.plan.strokes.length) S.plan.strokes.pop();
+  else if (S.points.length) S.points.pop();
+  else if (S.plan.strokes.length) S.plan.strokes.pop();
+  else { setStatus("되돌릴 것이 없습니다"); return; }
+  save(); render();
+});
+
+$("btn-table").addEventListener("click", () => { renderTable(); $("sheet").hidden = false; });
+$("btn-close").addEventListener("click", () => { $("sheet").hidden = true; });
+
+/* ===========================================================================
+   저장 / 복원
+=========================================================================== */
+let saveTimer = null;
+function save() {
+  const data = { points: S.points, plan: S.plan };
+  try { localStorage.setItem("wifi-survey", JSON.stringify(data)); } catch {}
+  // 폰이 서버에 못 닿아도 로컬에는 남아야 한다. 신호가 아예 없는 자리를
+  // 재러 간 참이라 저장 요청이 실패하는 건 정상 상황이다.
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    fetch("/api/points", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    }).catch(() => {});
+  }, 600);
+}
+
+function loadPlanImage() {
+  if (!S.plan.image) { S.planImg = null; draw(); return; }
+  const im = new Image();
+  im.onload = () => { S.planImg = im; draw(); };
+  im.src = S.plan.image;
+}
+
+function adopt(data) {
+  if (!data || !Array.isArray(data.points)) return false;
+  S.points = data.points;
+  S.plan = data.plan && typeof data.plan === "object" ? data.plan : { image: null, strokes: [] };
+  if (!Array.isArray(S.plan.strokes)) S.plan.strokes = [];
+  return true;
+}
+
+/* ===========================================================================
+   기동
+=========================================================================== */
+async function boot() {
+  try {
+    S.cfg = await fetch("/api/config", { cache: "no-store" }).then(r => r.json());
+  } catch {
+    setStatus("서버에 못 닿습니다");
+    return;
+  }
+
+  let loaded = false;
+  try { loaded = adopt(await fetch("/api/points", { cache: "no-store" }).then(r => r.json())); } catch {}
+  if (!loaded || !S.points.length) {
+    try { loaded = adopt(JSON.parse(localStorage.getItem("wifi-survey") || "null")); } catch {}
+  }
+
+  const r = await readRssi();
+  S.rssiOk = !!r;
+  $("tab-rssi").hidden = !S.rssiOk;
+
+  loadPlanImage();
+  fit();
+  render();
+  setStatus(S.points.length ? `측정점 ${S.points.length}개` : "지도를 탭하면 잽니다");
+}
+
+addEventListener("resize", fit);
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", render);
+boot();
+</script>
+</body>
+</html>

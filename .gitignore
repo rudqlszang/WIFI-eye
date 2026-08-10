@@ -1,0 +1,22 @@
+# 측정 결과. 남의 집 평면도와 측정값이라 소스가 아니고, 평면도 사진이
+# dataURL 로 들어가 있어서 몇 MB 씩 나간다.
+survey_data.json
+survey_data.tmp
+
+# 접속용 QR 페이지를 파일로 뽑았을 때. 그때그때의 IP 가 박힌다.
+qr.html
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# OS / 편집기
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+*~
+*.swp
